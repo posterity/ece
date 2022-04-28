@@ -530,9 +530,6 @@ func (d *Reader) read(p []byte) (n int, err error) {
 }
 
 // Read implements io.Reader.
-//
-// Read repeatedly calls the read function until p is filled
-// to it's maximum length.
 func (d *Reader) Read(p []byte) (n int, err error) {
 	for n < len(p) && err == nil {
 		var nn int
