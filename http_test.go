@@ -75,6 +75,42 @@ func TestRequestBody(t *testing.T) {
 	h.ServeHTTP(rec, req)
 }
 
+func TestUnsupportedEncoding(t *testing.T) {
+	fn := func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		io.Copy(w, r.Body)
+	}
+
+	h := Handler(key, 25, http.HandlerFunc(fn))
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(encrypted))
+	req.Header.Add("Content-Encoding", "invalid string")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	if wanted := http.StatusUnsupportedMediaType; wanted != resp.StatusCode {
+		t.Fatal("invalid status code. Wanted:", wanted, "Got:", resp.StatusCode)
+	}
+}
+
+func TestInvalidKey(t *testing.T) {
+	fn := func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		io.Copy(w, r.Body)
+	}
+
+	h := Handler(key, 25, http.HandlerFunc(fn))
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(encrypted))
+	req.Header.Add("Content-Encoding", "aes128gcm")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	resp := rec.Result()
+	if wanted := http.StatusUnsupportedMediaType; wanted != resp.StatusCode {
+		t.Fatal("invalid status code. Wanted:", wanted, "Got:", resp.StatusCode)
+	}
+}
+
 func TestClient(t *testing.T) {
 	encoding, ok := encodingFromKeySize(key)
 	if !ok {

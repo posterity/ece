@@ -116,10 +116,14 @@ func upgrade(key []byte, recordSize int, w http.ResponseWriter) (*responseWriter
 // Handler is an HTTP middleware that can transparently decrypt
 // incoming requests and encrypt outgoing responses.
 //
-// Incoming requests are decrypted if they come with a header
-// Content-Encoding set to either "aes128gcm" or "aes256gcm".
-// Similarly, responses are encrypted if the request's Accept-Encoding
-// or X-Accept-Encoding headers are set to either value.
+// Incoming requests are decrypted if their Content-Encoding
+// header is either "aes128gcm" or "aes256gcm". Similarly,
+// responses are encrypted if the the Accept-Encoding
+// (or X-Accept-Encoding) headers is set to either value.
+//
+// If an invalid encoding string is used, or if the configured
+// key doesn't match the encoding scheme announced in a request,
+// the server will responds with status code 415 Unsupported Media Type.
 func Handler(key []byte, recordSize int, h http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		contentEncoding, ok := getContentEncoding(r.Header)
@@ -128,19 +132,21 @@ func Handler(key []byte, recordSize int, h http.Handler) http.Handler {
 		}
 
 		acceptedEncoding, ok := getAcceptedEncoding(r.Header)
-		if ok && acceptedEncoding.checkKey(key) {
-			rw, err := upgrade(key, recordSize, w)
-			if err != nil {
-				log.Printf("failed to create a ResponseWriter : %v\n", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-			defer rw.Flush()
-			defer rw.ew.Close()
-			w = rw
+		if !ok || !acceptedEncoding.checkKey(key) {
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+			return
 		}
 
-		h.ServeHTTP(w, r)
+		rw, err := upgrade(key, recordSize, w)
+		if err != nil {
+			log.Printf("ece: failed to create a ResponseWriter : %v\n", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		defer rw.Flush()
+		defer rw.ew.Close()
+
+		h.ServeHTTP(rw, r)
 	}
 
 	return http.HandlerFunc(fn)

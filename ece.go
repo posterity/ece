@@ -56,6 +56,27 @@ import (
 	"unicode/utf8"
 )
 
+// Error represents a ECE-related error
+// that occurred during decryption.
+type Error struct {
+	msg     string
+	wrapped error
+}
+
+// Unwrap reveals the underlying error.
+func (err *Error) Unwrap() error {
+	return err.wrapped
+}
+
+// Error implements the error interface.
+func (err *Error) Error() string {
+	output := err.msg
+	if err.wrapped != nil {
+		output += ": " + err.wrapped.Error()
+	}
+	return output
+}
+
 // SaltLength as defined in RFC 8188.
 const SaltLength int = 16
 
@@ -209,13 +230,13 @@ func (h Header) KeyID() string {
 // NewHeader returns a new encoding header with the given parameters.
 func NewHeader(salt []byte, recordSize int, keyID string) (Header, error) {
 	if len(salt) != SaltLength {
-		return nil, fmt.Errorf("salt length is %d, but should be %d", len(salt), SaltLength)
+		return nil, fmt.Errorf("ece: salt length is %d, but should be %d", len(salt), SaltLength)
 	}
 	if recordSize > math.MaxUint32 {
-		return nil, fmt.Errorf("record size cannot be larger than %d", math.MaxUint32)
+		return nil, fmt.Errorf("ece: record size cannot be larger than %d", math.MaxUint32)
 	}
 	if len(keyID) > math.MaxUint8 {
-		return nil, fmt.Errorf("keyID cannot be longer than larger than %d bytes", math.MaxUint8)
+		return nil, fmt.Errorf("ece: keyID cannot be longer than larger than %d bytes", math.MaxUint8)
 	}
 
 	rb := make([]byte, 4)
@@ -261,6 +282,10 @@ func (e *Writer) flush(closing bool) (err error) {
 		}
 	}()
 
+	if len(e.buf) == 0 {
+		return nil
+	}
+
 	// Padding
 	delimiter := recordDelimiter
 	padding := e.header.RecordSize() - len(e.buf) - e.gcm.Overhead() - 1
@@ -273,7 +298,7 @@ func (e *Writer) flush(closing bool) (err error) {
 
 	// Padding check
 	if !closing && len(e.buf)+e.gcm.Overhead() != e.header.RecordSize() {
-		return errors.New("invalid record length")
+		return &Error{msg: "ece: invalid record length"}
 	}
 
 	e.buf, err = e.encrypt(e.buf)
@@ -363,7 +388,7 @@ func (e *Writer) Close() (err error) {
 
 	e.buf = nil
 	e.header = nil
-	e.err = errors.New("encryption.Writer: closed")
+	e.err = errors.New("writer is closed")
 	return
 }
 
@@ -389,7 +414,7 @@ func NewWriter(key, salt []byte, recordSize int, keyID string, w io.Writer) (*Wr
 
 	contentSize := header.RecordSize() - gcm.Overhead() - 1 // delimiter
 	if contentSize < 0 {
-		return nil, errors.New("record size cannot be smaller than the encryption and delimitation overhead")
+		return nil, &Error{msg: "record size cannot be smaller than the encryption and delimitation overhead"}
 	}
 
 	e := &Writer{
@@ -485,9 +510,14 @@ func (d *Reader) read(p []byte) (n int, err error) {
 		}
 	}()
 
+	if d.reachedFinalRecord {
+		err = io.EOF
+		return
+	}
+
 	if d.gcm == nil {
 		if err := d.readHeader(); err != nil {
-			err = fmt.Errorf("failed to read header: %v", err)
+			err = &Error{msg: "ece: failed to read header", wrapped: err}
 			return 0, err
 		}
 	}
@@ -514,11 +544,8 @@ func (d *Reader) read(p []byte) (n int, err error) {
 	delimiter := d.buf[len(d.buf)-1]
 	if delimiter == recordDelimiterFinal {
 		d.reachedFinalRecord = true
-	} else if d.reachedFinalRecord && delimiter == recordDelimiter {
-		err = errors.New("unexpected record delimiter after a final record")
-		return
 	} else if delimiter != recordDelimiter {
-		err = errors.New("missing record delimiter")
+		err = &Error{msg: "ece: missing record delimiter", wrapped: err}
 		return
 	}
 	d.buf = d.buf[:len(d.buf)-1]
@@ -558,7 +585,7 @@ func NewReader(key []byte, r io.ReadCloser) *Reader {
 // the result of of a[i] XOR b[i].
 func xorBytes(a, b []byte) ([]byte, error) {
 	if len(a) != len(b) {
-		return nil, errors.New("slices must be of equal length")
+		return nil, errors.New("ece: slices must be of equal length")
 	}
 	output := make([]byte, len(a))
 	for i := 0; i < len(a); i++ {
