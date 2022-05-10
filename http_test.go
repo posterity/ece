@@ -75,7 +75,7 @@ func TestRequestBody(t *testing.T) {
 	h.ServeHTTP(rec, req)
 }
 
-func TestUnsupportedEncoding(t *testing.T) {
+func TestIgnoreUnknownEncoding(t *testing.T) {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		io.Copy(w, r.Body)
@@ -84,11 +84,12 @@ func TestUnsupportedEncoding(t *testing.T) {
 	h := Handler(key, 25, http.HandlerFunc(fn))
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(encrypted))
 	req.Header.Add("Content-Encoding", "invalid string")
+	req.Header.Add("Accept-Encoding", "invalid string")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
 	resp := rec.Result()
-	if wanted := http.StatusUnsupportedMediaType; wanted != resp.StatusCode {
+	if wanted := http.StatusOK; wanted != resp.StatusCode {
 		t.Fatal("invalid status code. Wanted:", wanted, "Got:", resp.StatusCode)
 	}
 }
@@ -101,7 +102,7 @@ func TestInvalidKey(t *testing.T) {
 
 	h := Handler(key, 25, http.HandlerFunc(fn))
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(encrypted))
-	req.Header.Add("Content-Encoding", "aes128gcm")
+	req.Header.Add("Content-Encoding", "aes256gcm")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 

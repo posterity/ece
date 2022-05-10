@@ -126,17 +126,16 @@ func upgrade(key []byte, recordSize int, w http.ResponseWriter) (*responseWriter
 func Handler(key []byte, recordSize int, h http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		contentEncoding, ok := getContentEncoding(r.Header)
-		if ok && r.Body != nil && contentEncoding.checkKey(key) {
-			r.Body = NewReader(key, r.Body)
+		if ok {
+			if contentEncoding.checkKey(key) {
+				r.Body = NewReader(key, r.Body)
+			} else {
+				w.WriteHeader(http.StatusUnsupportedMediaType)
+			}
 		}
 
 		acceptedEncoding, ok := getAcceptedEncoding(r.Header)
-		if ok && !acceptedEncoding.checkKey(key) {
-			w.WriteHeader(http.StatusUnsupportedMediaType)
-			return
-		}
-
-		if ok {
+		if ok && acceptedEncoding.checkKey(key) {
 			rw, err := upgrade(key, recordSize, w)
 			if err != nil {
 				log.Printf("ece: failed to create a ResponseWriter : %v\n", err)
