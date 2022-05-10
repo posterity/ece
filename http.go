@@ -120,9 +120,9 @@ func upgrade(key []byte, recordSize int, w http.ResponseWriter) (*responseWriter
 // responses are encrypted if the the Accept-Encoding
 // (or X-Accept-Encoding) headers is set to either value.
 //
-// If an invalid encoding string is used, or if the configured
-// key doesn't match the encoding scheme announced in a request,
-// the server will responds with status code 415 Unsupported Media Type.
+// If the configured key doesn't match the encoding scheme
+// announced in a request, the server will responds with
+// status code 415 Unsupported Media Type.
 func Handler(key []byte, recordSize int, h http.Handler) http.Handler {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		contentEncoding, ok := getContentEncoding(r.Header)
@@ -131,21 +131,24 @@ func Handler(key []byte, recordSize int, h http.Handler) http.Handler {
 		}
 
 		acceptedEncoding, ok := getAcceptedEncoding(r.Header)
-		if !ok || !acceptedEncoding.checkKey(key) {
+		if ok && !acceptedEncoding.checkKey(key) {
 			w.WriteHeader(http.StatusUnsupportedMediaType)
 			return
 		}
 
-		rw, err := upgrade(key, recordSize, w)
-		if err != nil {
-			log.Printf("ece: failed to create a ResponseWriter : %v\n", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
+		if ok {
+			rw, err := upgrade(key, recordSize, w)
+			if err != nil {
+				log.Printf("ece: failed to create a ResponseWriter : %v\n", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			defer rw.Flush()
+			defer rw.ew.Close()
+			w = rw
 		}
-		defer rw.Flush()
-		defer rw.ew.Close()
 
-		h.ServeHTTP(rw, r)
+		h.ServeHTTP(w, r)
 	}
 
 	return http.HandlerFunc(fn)
