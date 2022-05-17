@@ -87,6 +87,22 @@ type Encoding struct {
 	Bits int
 }
 
+// NewWriter returns a new writer for this encoding.
+func (e *Encoding) NewWriter(key, salt []byte, recordSize int, keyID string, w io.Writer) (io.Writer, error) {
+	if !e.checkKey(key) {
+		return nil, errors.New("ece: invalid key size")
+	}
+	return NewWriter(key, salt, recordSize, keyID, w)
+}
+
+// NewReader returns a new reader for this encoding.
+func (e *Encoding) NewReader(key []byte, r io.ReadCloser) (io.Reader, error) {
+	if !e.checkKey(key) {
+		return nil, errors.New("ece: invalid key size")
+	}
+	return NewReader(key, r), nil
+}
+
 // checkKey returns true if k is suitable
 // for e.
 func (e *Encoding) checkKey(k []byte) bool {
@@ -192,6 +208,17 @@ func deriveNonce(prk []byte, sequence *big.Int, length int) []byte {
 	return nonce
 }
 
+const (
+	rsLen = 4
+	idLen = 1
+)
+
+var offsets = []int{
+	SaltLength,
+	SaltLength + rsLen,
+	SaltLength + rsLen + idLen,
+}
+
 // Header represents the header of an encrypted
 // message.
 //
@@ -203,28 +230,53 @@ type Header []byte
 
 // Salt returns the random salt in h.
 func (h Header) Salt() []byte {
-	return h[0:SaltLength]
+	return h[:offsets[0]]
 }
 
 // RecordSize returns the size of a single record
 // in a message.
 func (h Header) RecordSize() int {
-	return int(binary.BigEndian.Uint32(h[SaltLength : SaltLength+4]))
+	return int(binary.BigEndian.Uint32(h[offsets[0]:offsets[1]]))
 }
 
-// IDLength returns the length of the KeyID
+// idLength returns the length of the KeyID
 // string in the header.
-func (h Header) IDLength() int {
-	return int(h[SaltLength+4])
+func (h Header) idLength() int {
+	return int(h[offsets[1]])
 }
 
 // KeyID returns the ID of the key used to
 // encrypt a message.
 func (h Header) KeyID() string {
-	if h.IDLength() == 0 {
+	if h.idLength() == 0 {
 		return ""
 	}
-	return string(h[SaltLength+5 : SaltLength+5+h.IDLength()])
+	return string(h[offsets[2] : offsets[2]+h.idLength()])
+}
+
+// ReadFrom reads from r until the header h
+// is fully formed.
+//
+// ReadFrom implements io.ReaderFrom.
+func (h *Header) ReadFrom(r io.Reader) (n int64, err error) {
+	const min = SaltLength + 4 + 1
+
+	*h = make(Header, min)
+	if read, err := io.ReadFull(r, *h); err != nil {
+		n += int64(read)
+		return n, err
+	}
+
+	if idLen := h.idLength(); idLen > 0 {
+		keyID := make([]byte, idLen)
+		if read, err := io.ReadFull(r, keyID); err != nil {
+			n += int64(read)
+			return n, err
+		}
+		*h = append(*h, keyID...)
+	}
+
+	return n, nil
 }
 
 // NewHeader returns a new encoding header with the given parameters.
@@ -239,12 +291,12 @@ func NewHeader(salt []byte, recordSize int, keyID string) (Header, error) {
 		return nil, fmt.Errorf("ece: keyID cannot be longer than larger than %d bytes", math.MaxUint8)
 	}
 
-	rb := make([]byte, 4)
-	binary.BigEndian.PutUint32(rb, uint32(recordSize))
+	rs := make([]byte, 4)
+	binary.BigEndian.PutUint32(rs, uint32(recordSize))
 
 	b := make([]byte, 0, len(salt)+4+1+len(keyID))
 	b = append(b, salt...)
-	b = append(b, rb...)
+	b = append(b, rs...)
 
 	b = append(b, uint8(utf8.RuneCount([]byte(keyID))))
 	b = append(b, []byte(keyID)...)
@@ -282,10 +334,6 @@ func (e *Writer) flush(closing bool) (err error) {
 		}
 	}()
 
-	if len(e.buf) == 0 {
-		return nil
-	}
-
 	// Padding
 	delimiter := recordDelimiter
 	padding := e.header.RecordSize() - len(e.buf) - e.gcm.Overhead() - 1
@@ -296,7 +344,7 @@ func (e *Writer) flush(closing bool) (err error) {
 	e.buf = append(e.buf, delimiter)
 	e.buf = append(e.buf, bytes.Repeat([]byte{recordPadding}, padding)...)
 
-	// Padding check
+	// Record-size check
 	if !closing && len(e.buf)+e.gcm.Overhead() != e.header.RecordSize() {
 		return &Error{msg: "ece: invalid record length"}
 	}
@@ -436,14 +484,13 @@ type Reader struct {
 	// data has been read (minimum 21 bytes)
 	Header Header
 
-	gcm                cipher.AEAD
-	prk                []byte
-	key                []byte
-	r                  io.ReadCloser
-	buf                []byte
-	seq                *big.Int // uint96
-	reachedFinalRecord bool
-	err                error
+	gcm cipher.AEAD
+	prk []byte
+	key []byte
+	r   io.ReadCloser
+	buf []byte
+	seq *big.Int // uint96
+	err error
 }
 
 // decrypt decrypts p using d.gcm.
@@ -455,21 +502,8 @@ func (d *Reader) decrypt(p []byte) ([]byte, error) {
 // readHeader performs multiple reads on r until the header is
 // assembled.
 func (d *Reader) readHeader() error {
-	// Read Salt, RecordSize and IDLength
-	fixed := SaltLength + 4 + 1
-	d.Header = make(Header, fixed)
-	if _, err := io.ReadFull(d.r, d.Header); err != nil {
+	if _, err := d.Header.ReadFrom(d.r); err != nil {
 		return err
-	}
-
-	// Read KeyID
-	if d.Header.IDLength() > 0 {
-		keyID := make([]byte, d.Header.IDLength())
-		_, err := io.ReadFull(d.r, keyID)
-		if err != nil {
-			return err
-		}
-		d.Header = append(d.Header, keyID...)
 	}
 
 	prk := computePRK(d.key, d.Header.Salt(), len(d.key))
@@ -510,11 +544,6 @@ func (d *Reader) read(p []byte) (n int, err error) {
 		}
 	}()
 
-	if d.reachedFinalRecord {
-		err = io.EOF
-		return
-	}
-
 	if d.gcm == nil {
 		if err := d.readHeader(); err != nil {
 			err = &Error{msg: "ece: failed to read header", wrapped: err}
@@ -526,7 +555,6 @@ func (d *Reader) read(p []byte) (n int, err error) {
 	n, err = io.ReadFull(d.r, d.buf)
 	if err == io.ErrUnexpectedEOF {
 		d.err = io.EOF
-		d.reachedFinalRecord = true
 	} else if err != nil {
 		return
 	}
@@ -543,7 +571,7 @@ func (d *Reader) read(p []byte) (n int, err error) {
 	// Find and trim delimiter
 	delimiter := d.buf[len(d.buf)-1]
 	if delimiter == recordDelimiterFinal {
-		d.reachedFinalRecord = true
+		d.err = io.EOF
 	} else if delimiter != recordDelimiter {
 		err = &Error{msg: "ece: missing record delimiter", wrapped: err}
 		return
@@ -566,8 +594,7 @@ func (d *Reader) Read(p []byte) (n int, err error) {
 	return
 }
 
-// Close closes the underlying reader if it implements
-// http.
+// Close closes the underlying reader.
 func (d *Reader) Close() error {
 	return d.r.Close()
 }
@@ -575,9 +602,8 @@ func (d *Reader) Close() error {
 // NewReader deciphers data from r.
 func NewReader(key []byte, r io.ReadCloser) *Reader {
 	return &Reader{
-		r:                  r,
-		key:                key,
-		reachedFinalRecord: false,
+		r:   r,
+		key: key,
 	}
 }
 
@@ -592,4 +618,27 @@ func xorBytes(a, b []byte) ([]byte, error) {
 		output[i] = a[i] ^ b[i]
 	}
 	return output, nil
+}
+
+// Pipe reads data from src and makes it available in an encrypted
+// form in the returned reader.
+//
+// src read until EOF is reached.
+func Pipe(src io.ReadCloser, key []byte, rs int, keyID string) (io.ReadCloser, error) {
+	r, w := io.Pipe()
+	ew, err := NewWriter(key, NewRandomSalt(), rs, keyID, w)
+	if err != nil {
+		return nil, err
+	}
+
+	go func() {
+		defer src.Close()
+		if _, err := io.Copy(ew, src); err != nil {
+			w.CloseWithError(err)
+			return
+		}
+		ew.Close()
+	}()
+
+	return r, nil
 }

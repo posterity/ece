@@ -10,10 +10,10 @@ import (
 // encodingFromKeySize returns the name of the encoding
 // based on length of k.
 func encodingFromKeySize(k []byte) (*Encoding, bool) {
-	switch size := len(k); size {
-	case AES256GCM.Bits / 8:
+	switch size := len(k) * 8; size {
+	case AES256GCM.Bits:
 		return AES256GCM, true
-	case AES128GCM.Bits / 8:
+	case AES128GCM.Bits:
 		return AES128GCM, true
 	default:
 		return nil, false
@@ -61,17 +61,21 @@ func getAcceptedEncoding(h http.Header) (*Encoding, bool) {
 	return nil, false
 }
 
-// responseWriter adds supports for ECE to an existing
-// http.ResponseWriter.
-type responseWriter struct {
+// ResponseWriter wraps a pre-existing http.ResponseWriter
+// to add supports for encryption using ECE.
+type ResponseWriter struct {
 	encoding        *Encoding
 	ew              *Writer
 	isHeaderWritten bool
 	http.ResponseWriter
 }
 
-// Flush exposes the underlying Flush method of ew.
-func (w *responseWriter) Flush() {
+// Flush implements http.Flusher.
+//
+// Flush must be called in order for the data written
+// to the underlying ResponseWriter to be formatted
+// correctly.
+func (w *ResponseWriter) Flush() {
 	w.ew.Flush()
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
@@ -80,7 +84,7 @@ func (w *responseWriter) Flush() {
 
 // WriteHeader injects the HTTP headers required for ECE
 // before writing the status code.
-func (w *responseWriter) WriteHeader(code int) {
+func (w *ResponseWriter) WriteHeader(code int) {
 	w.Header().Add("Accept-Encoding", w.encoding.Name)
 	w.Header().Add("Content-Encoding", w.encoding.Name)
 	w.Header().Set("Content-Type", "application/octet-stream")
@@ -89,17 +93,17 @@ func (w *responseWriter) WriteHeader(code int) {
 	w.isHeaderWritten = true
 }
 
-// WriteHeader injects the HTTP headers required for ECE
-// before writing the status code.
-func (w *responseWriter) Write(p []byte) (int, error) {
+// See the documentation for http.ResponseWriter.
+func (w *ResponseWriter) Write(p []byte) (int, error) {
 	if !w.isHeaderWritten {
 		w.WriteHeader(http.StatusOK)
 	}
 	return w.ew.Write(p)
 }
 
-// upgrade upgrades an http.ResponseWriter into an ECE-capable one.
-func upgrade(key []byte, recordSize int, w http.ResponseWriter) (*responseWriter, error) {
+// NewResponseWriter upgrades w to write ECE encoded
+// data in HTTP responses.
+func NewResponseWriter(key []byte, recordSize int, w http.ResponseWriter) (*ResponseWriter, error) {
 	encoding, ok := encodingFromKeySize(key)
 	if !ok {
 		return nil, errors.New("invalid key size")
@@ -109,7 +113,7 @@ func upgrade(key []byte, recordSize int, w http.ResponseWriter) (*responseWriter
 	if err != nil {
 		return nil, err
 	}
-	return &responseWriter{encoding: encoding, ew: ew, ResponseWriter: w}, nil
+	return &ResponseWriter{encoding: encoding, ew: ew, ResponseWriter: w}, nil
 }
 
 // Handler is an HTTP middleware that can transparently decrypt
@@ -118,7 +122,7 @@ func upgrade(key []byte, recordSize int, w http.ResponseWriter) (*responseWriter
 // Incoming requests are decrypted if their Content-Encoding
 // header is either "aes128gcm" or "aes256gcm". Similarly,
 // responses are encrypted if the the Accept-Encoding
-// (or X-Accept-Encoding) headers is set to either value.
+// (or X-Accept-Encoding) header is set to either value.
 //
 // If the configured key doesn't match the encoding scheme
 // announced in a request, the server will responds with
@@ -136,7 +140,7 @@ func Handler(key []byte, recordSize int, h http.Handler) http.Handler {
 
 		acceptedEncoding, ok := getAcceptedEncoding(r.Header)
 		if ok && acceptedEncoding.checkKey(key) {
-			rw, err := upgrade(key, recordSize, w)
+			rw, err := NewResponseWriter(key, recordSize, w)
 			if err != nil {
 				log.Printf("ece: failed to create a ResponseWriter : %v\n", err)
 				w.WriteHeader(http.StatusInternalServerError)
@@ -190,23 +194,10 @@ func (c *Client) Post(url, contentType string, body io.Reader) (*http.Response, 
 
 // hijackRequest modified req.Body to use an encrypter.
 func (c *Client) hijackRequest(req *http.Request) error {
-	const rs = 4096
-
-	r, w := io.Pipe()
-	ew, err := NewWriter(c.key, NewRandomSalt(), rs, c.keyID, w)
+	r, err := Pipe(req.Body, c.key, 4096, c.keyID)
 	if err != nil {
 		return err
 	}
-
-	body := req.Body
-	go func() {
-		defer body.Close()
-		if _, err := io.Copy(ew, body); err != nil {
-			w.CloseWithError(err)
-			return
-		}
-		ew.Close()
-	}()
 
 	req.ContentLength = 0
 	req.Body = r

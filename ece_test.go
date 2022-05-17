@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"testing"
 )
 
@@ -41,6 +42,43 @@ func assertNotEqual(t *testing.T, desc string, wanted, got []byte) {
 
 	if bytes.Equal(wanted, got) {
 		t.Fatalf("%s → bytes should not be equal", desc)
+	}
+}
+
+func TestHeader(t *testing.T) {
+	const (
+		rs    = 621
+		keyID = "Hello, World!"
+	)
+	h, err := NewHeader(salt, rs, keyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data := make([]byte, 2048)
+	if _, err := io.ReadFull(rand.Reader, data); err != nil {
+		t.Fatal(err)
+	}
+
+	r := bytes.NewReader(append(h, data...))
+
+	var got Header
+	if _, err := got.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+
+	assertEqual(t, "Salt", salt, h.Salt())
+
+	if got := h.RecordSize(); rs != got {
+		t.Fatal("rs doesn't match. Wanted:", rs, "Got:", got)
+	}
+
+	if got := h.idLength(); len(keyID) != got {
+		t.Fatal("idLen doesn't match. Wanted:", len(keyID), "Got:", got)
+	}
+
+	if got := h.KeyID(); keyID != got {
+		t.Fatal("keyID doesn't match. Wanted:", keyID, "Got:", got)
 	}
 }
 
@@ -234,4 +272,18 @@ func ExampleWriter() {
 	}
 
 	log.Println("dest now contains encrypted data")
+}
+
+func ExamplePipe() {
+	var plain io.ReadCloser
+
+	r, err := Pipe(plain, key, 4096, "")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	http.Post("example.com", "application/octet/stream", r)
+
+	// The HTTP POST request was sent with the content of plain
+	// encrypted.
 }
