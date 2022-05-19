@@ -101,7 +101,7 @@ func (w *ResponseWriter) Write(p []byte) (int, error) {
 	return w.ew.Write(p)
 }
 
-// NewResponseWriter upgrades w to write ECE encoded
+// NewResponseWriter upgrades w to write ECE-encoded
 // data in HTTP responses.
 func NewResponseWriter(key []byte, recordSize int, w http.ResponseWriter) (*ResponseWriter, error) {
 	encoding, ok := encodingFromKeySize(key)
@@ -237,8 +237,8 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// NewClient returns a new HTTP client capable of handling
-// encrypted content.
+// NewClient returns a new HTTP client capable of encoding
+// and decoding ECE.
 func NewClient(keyID string, key []byte) (*Client, error) {
 	encoding, ok := encodingFromKeySize(key)
 	if !ok {

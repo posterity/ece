@@ -5,19 +5,18 @@
 // Reader can read and decipher encrypted data, while Writer can be
 // used to write a cipher into an underlying io.Writer.
 //
-// Client is an HTTP client capable of encryption requests before they're sent,
+// Client is an HTTP client capable of encrypting requests before they're sent,
 // and decrypting responses before they're read.
 //
 // Handler is an HTTP middleware capable of transparently decrypting
-// incoming requests, and encryption outgoing responses.
+// incoming requests, and encrypting outgoing responses.
 //
 //
 // AES-GCM
 //
-// RFC 8188 only mentions AES-128-GCM as the encryption algorithm of
-// choice. However, this implementation extends it by supporting 256-bit
-// encryption as well. The only difference from a developer experience is
-// the length of the key you must provide.
+// While RFC 8188 only mentions AES-128-GCM, this implementation extends it
+// with support for 256-bit encryption as well using AES-256-GCM. The only
+// difference from a developer-experience is the length of the key you must provide.
 //
 // For AES-256-GCM, the key must be 32 bytes long.
 //
@@ -28,15 +27,15 @@
 //
 // ECE encrypts data in chunks of predetermined length.
 // The value can be anything above 17 characters,
-// which corresponds to the AES GCM tag length, plus a
-// block-delimiter.
+// which corresponds to the AES-GCM tag length (16 bytes), plus a
+// block-delimiter (1 byte).
 //
-// The ideal value depends on your use case. Smaller values are
-// create larger ciphers but require very little memory to be
-// decrypted. Larger values are more efficient, but require more
-// memory.
+// The ideal value depends on your use case. Smaller values create
+// longer ciphers but require fewer memory to be
+// decrypted, while larger values are more efficient length-wise, but
+// require more memory.
 //
-// Multiples of 16 are recommended.
+// The RFC recommends using multiples of 16.
 package ece
 
 import (
@@ -56,7 +55,7 @@ import (
 	"unicode/utf8"
 )
 
-// Error represents a ECE-related error
+// Error represents an ECE-related error
 // that occurred during decryption.
 type Error struct {
 	msg     string
@@ -81,7 +80,7 @@ func (err *Error) Error() string {
 const SaltLength int = 16
 
 // Encoding represents a type of supported
-// encodings
+// encoding.
 type Encoding struct {
 	Name string
 	Bits int
@@ -103,8 +102,7 @@ func (e *Encoding) NewReader(key []byte, r io.ReadCloser) (io.Reader, error) {
 	return NewReader(key, r), nil
 }
 
-// checkKey returns true if k is suitable
-// for e.
+// checkKey returns true if k is suitable for e.
 func (e *Encoding) checkKey(k []byte) bool {
 	return len(k) == (e.Bits / 8)
 }
@@ -114,7 +112,7 @@ func (e *Encoding) checkKey(k []byte) bool {
 // if it can't generate random data.
 func (e *Encoding) RandomKey() []byte {
 	k := make([]byte, e.Bits/8)
-	if _, err := rand.Read(k); err != nil {
+	if _, err := io.ReadFull(rand.Reader, k); err != nil {
 		panic(err)
 	}
 	return k
@@ -224,7 +222,7 @@ var offsets = []int{
 //
 // Structure:
 // 	+-----------+--------+-----------+---------------+
-// 	| salt (16) | rs (4) | idlen (1) | keyid (idlen) |
+// 	| salt (16) | rs (4) | idLen (1) | keyID (idLen) |
 // 	+-----------+--------+-----------+---------------+
 type Header []byte
 
@@ -259,7 +257,7 @@ func (h Header) KeyID() string {
 //
 // ReadFrom implements io.ReaderFrom.
 func (h *Header) ReadFrom(r io.Reader) (n int64, err error) {
-	const min = SaltLength + 4 + 1
+	const min = SaltLength + rsLen + idLen
 
 	*h = make(Header, min)
 	if read, err := io.ReadFull(r, *h); err != nil {
@@ -282,13 +280,13 @@ func (h *Header) ReadFrom(r io.Reader) (n int64, err error) {
 // NewHeader returns a new encoding header with the given parameters.
 func NewHeader(salt []byte, recordSize int, keyID string) (Header, error) {
 	if len(salt) != SaltLength {
-		return nil, fmt.Errorf("ece: salt length is %d, but should be %d", len(salt), SaltLength)
+		return nil, fmt.Errorf("ece: salt length is %d bytes, but must be %d", len(salt), SaltLength)
 	}
 	if recordSize > math.MaxUint32 {
 		return nil, fmt.Errorf("ece: record size cannot be larger than %d", math.MaxUint32)
 	}
 	if len(keyID) > math.MaxUint8 {
-		return nil, fmt.Errorf("ece: keyID cannot be longer than larger than %d bytes", math.MaxUint8)
+		return nil, fmt.Errorf("ece: keyID cannot be longer than %d bytes", math.MaxUint8)
 	}
 
 	rs := make([]byte, 4)
@@ -304,8 +302,7 @@ func NewHeader(salt []byte, recordSize int, keyID string) (Header, error) {
 }
 
 // Writer implements a io.Writer that can
-// write ECE-formatted encrypted content to
-// an underlying writer.
+// write ECE-formatted content to an underlying writer.
 type Writer struct {
 	gcm         cipher.AEAD
 	prk         []byte
@@ -370,7 +367,7 @@ func (e *Writer) flush(closing bool) (err error) {
 	return
 }
 
-// Flush writes the data currently in the buffer to the
+// Flush writes any currently buffered data to the
 // underlying writer.
 func (e *Writer) Flush() {
 	e.err = e.flush(false)
@@ -480,9 +477,7 @@ func NewWriter(key, salt []byte, recordSize int, keyID string, w io.Writer) (*Wr
 // Reader implements an io.Reader that can
 // decipher ECE data from an underlying reader.
 type Reader struct {
-	// Only available after enough
-	// data has been read (minimum 21 bytes)
-	Header Header
+	Header Header // nil until enough bytes are read
 
 	gcm cipher.AEAD
 	prk []byte
@@ -623,10 +618,10 @@ func xorBytes(a, b []byte) ([]byte, error) {
 // Pipe reads data from src and makes it available in an encrypted
 // form in the returned reader.
 //
-// src read until EOF is reached.
-func Pipe(src io.ReadCloser, key []byte, rs int, keyID string) (io.ReadCloser, error) {
+// Pipe will read src until EOF is reached.
+func Pipe(src io.ReadCloser, key []byte, recordSize int, keyID string) (io.ReadCloser, error) {
 	r, w := io.Pipe()
-	ew, err := NewWriter(key, NewRandomSalt(), rs, keyID, w)
+	ew, err := NewWriter(key, NewRandomSalt(), recordSize, keyID, w)
 	if err != nil {
 		return nil, err
 	}
