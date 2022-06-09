@@ -87,8 +87,9 @@ func (w *ResponseWriter) Flush() {
 func (w *ResponseWriter) WriteHeader(code int) {
 	w.Header().Add("Accept-Encoding", w.encoding.Name)
 	w.Header().Add("Content-Encoding", w.encoding.Name)
-	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Add("Vary", "Content-Encoding")
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Add("Vary", "Content-Type")
 	w.ResponseWriter.WriteHeader(code)
 	w.isHeaderWritten = true
 }
