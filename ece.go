@@ -160,7 +160,9 @@ var (
 // (SaltLength bytes).
 func NewRandomSalt() []byte {
 	k := make([]byte, SaltLength)
-	rand.Read(k[:])
+	if _, err := rand.Read(k[:]); err != nil {
+		panic(fmt.Errorf("unable to source random bytes: %v", err))
+	}
 	return k
 }
 
@@ -632,7 +634,7 @@ func Pipe(src io.ReadCloser, key []byte, recordSize int, keyID string) (io.ReadC
 			w.CloseWithError(err)
 			return
 		}
-		ew.Close()
+		w.CloseWithError(ew.Close())
 	}()
 
 	return r, nil
