@@ -549,7 +549,9 @@ func (d *Reader) read(p []byte) (n int, err error) {
 	}
 
 	d.buf = make([]byte, d.Header.RecordSize())
-	n, err = io.ReadFull(d.r, d.buf)
+
+	var nn int
+	nn, err = io.ReadFull(d.r, d.buf)
 	if err == io.ErrUnexpectedEOF {
 		d.err = io.EOF
 	} else if err != nil {
@@ -557,7 +559,7 @@ func (d *Reader) read(p []byte) (n int, err error) {
 	}
 
 	// Decrypt
-	d.buf, err = d.decrypt(d.buf[:n])
+	d.buf, err = d.decrypt(d.buf[:nn])
 	if err != nil {
 		return
 	}
