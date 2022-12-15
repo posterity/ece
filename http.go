@@ -64,9 +64,8 @@ func getAcceptedEncoding(h http.Header) (*Encoding, bool) {
 // ResponseWriter wraps a pre-existing http.ResponseWriter
 // to add supports for encryption using ECE.
 type ResponseWriter struct {
-	encoding        *Encoding
-	ew              *Writer
-	isHeaderWritten bool
+	encoding *Encoding
+	ew       *Writer
 	http.ResponseWriter
 }
 
@@ -82,23 +81,8 @@ func (w *ResponseWriter) Flush() {
 	}
 }
 
-// WriteHeader injects the HTTP headers required for ECE
-// before writing the status code.
-func (w *ResponseWriter) WriteHeader(code int) {
-	w.Header().Add("Accept-Encoding", w.encoding.Name)
-	w.Header().Add("Content-Encoding", w.encoding.Name)
-	w.Header().Add("Vary", "Content-Encoding")
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Add("Vary", "Content-Type")
-	w.ResponseWriter.WriteHeader(code)
-	w.isHeaderWritten = true
-}
-
 // See the documentation for http.ResponseWriter.
 func (w *ResponseWriter) Write(p []byte) (int, error) {
-	if !w.isHeaderWritten {
-		w.WriteHeader(http.StatusOK)
-	}
 	return w.ew.Write(p)
 }
 
@@ -114,6 +98,11 @@ func NewResponseWriter(key []byte, recordSize int, w http.ResponseWriter) (*Resp
 	if err != nil {
 		return nil, err
 	}
+	w.Header().Add("Accept-Encoding", encoding.Name)
+	w.Header().Add("Content-Encoding", encoding.Name)
+	w.Header().Add("Vary", "Content-Encoding")
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Add("Vary", "Content-Type")
 	return &ResponseWriter{encoding: encoding, ew: ew, ResponseWriter: w}, nil
 }
 
