@@ -94,7 +94,7 @@ func TestIgnoreUnknownEncoding(t *testing.T) {
 	}
 }
 
-func TestInvalidKey(t *testing.T) {
+func TestMiddlewareInvalidKey(t *testing.T) {
 	fn := func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		io.Copy(w, r.Body)

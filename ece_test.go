@@ -238,6 +238,39 @@ func TestLargeStream(t *testing.T) {
 	})
 }
 
+func TestReaderInvalidKey(t *testing.T) {
+	data := make([]byte, 1024)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+
+	var (
+		k1  = AES256GCM.RandomKey()
+		k2  = AES128GCM.RandomKey()
+		buf = new(bytes.Buffer)
+	)
+
+	w, err := NewWriter(k1, salt, 4096, "", buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewReader(k2, bytes.NewBuffer(buf.Bytes()))
+	n, err := r.Read(make([]byte, 128))
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if n > 0 {
+		t.Fatal("expected bytes read to be zero")
+	}
+}
+
 func ExampleReader() {
 	var key []byte           // Main decryption key
 	var cipher io.ReadCloser // AES-GCM encrypted data
