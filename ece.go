@@ -1,29 +1,30 @@
 // Package ece provides support for reading and writing
 // streams encoded using ECE (Encrypted-Content-Encoding) for HTTP,
-// as defined in RFC 8188.
+// as defined in [RFC8188].
 //
 // Reader can read and decipher encrypted data, while Writer can be
 // used to write a cipher into an underlying io.Writer.
 //
 // Client is an HTTP client capable of encrypting requests before they're sent,
-// and decrypting responses before they're read.
+// and decrypting responses as they're received.
 //
 // Handler is an HTTP middleware capable of transparently decrypting
-// incoming requests, and encrypting outgoing responses.
+// incoming requests and encrypting outgoing responses for clients that
+// support it.
 //
+// # AES-GCM
 //
-// AES-GCM
+// While [RFC8188] only mentions AES-128-GCM, this implementation extends it
+// with support for 256-bit encryption (i.e. AES-256-GCM).
 //
-// While RFC 8188 only mentions AES-128-GCM, this implementation extends it
-// with support for 256-bit encryption as well using AES-256-GCM. The only
-// difference from a developer-experience is the length of the key you must provide.
+// Use 32-byte keys for AES-256-GCM, and 16-byte ones for AES-128-GCM.
 //
-// For AES-256-GCM, the key must be 32 bytes long.
+//		key := ece.AES256GCM.RandomKey()
+//		fmt.Println(len(key))
 //
-// For AES-128-GCM, the key must be 16 bytes long.
+//	 -> 32
 //
-//
-// Record Size
+// # Record Size
 //
 // ECE encrypts data in chunks of predetermined length.
 // The value can be anything above 17 characters,
@@ -31,11 +32,13 @@
 // block-delimiter (1 byte).
 //
 // The ideal value depends on your use case. Smaller values create
-// longer ciphers but require fewer memory to be
-// decrypted, while larger values are more efficient length-wise, but
-// require more memory.
+// longer ciphers but require less memory to be
+// decrypted, while larger values generate shorter ciphers, but
+// require more memory for decryption.
 //
-// The RFC recommends using multiples of 16.
+// [RFC8188] recommends using multiples of 16.
+//
+// [RFC8188]: https://datatracker.ietf.org/doc/html/rfc8188
 package ece
 
 import (
@@ -170,7 +173,8 @@ func NewRandomSalt() []byte {
 // key and salt.
 //
 // Formula:
-// 	HMAC-SHA-256 (salt, IKM)
+//
+//	HMAC-SHA-256 (salt, IKM)
 func computePRK(key, salt []byte, length int) []byte {
 	h := hmac.New(sha256.New, salt)
 	h.Write(key)
@@ -181,7 +185,8 @@ func computePRK(key, salt []byte, length int) []byte {
 // from a master key.
 //
 // Formula:
-// 	CEK = HMAC-SHA-256(PRK, cek_info || 0x01)
+//
+//	CEK = HMAC-SHA-256(PRK, cek_info || 0x01)
 func deriveCEK(prk []byte, length int) []byte {
 	h := hmac.New(sha256.New, prk)
 	h.Write(cekInfo)
@@ -192,7 +197,8 @@ func deriveCEK(prk []byte, length int) []byte {
 // based on the PRK.
 //
 // Formula:
-// 	NONCE = HMAC-SHA-256(PRK, nonce_info || 0x01) XOR SEQ
+//
+//	NONCE = HMAC-SHA-256(PRK, nonce_info || 0x01) XOR SEQ
 func deriveNonce(prk []byte, sequence *big.Int, length int) []byte {
 	h := hmac.New(sha256.New, prk)
 	h.Write(nonceInfo)
@@ -223,9 +229,10 @@ var offsets = []int{
 // message.
 //
 // Structure:
-// 	+-----------+--------+-----------+---------------+
-// 	| salt (16) | rs (4) | idLen (1) | keyID (idLen) |
-// 	+-----------+--------+-----------+---------------+
+//
+//	+-----------+--------+-----------+---------------+
+//	| salt (16) | rs (4) | idLen (1) | keyID (idLen) |
+//	+-----------+--------+-----------+---------------+
 type Header []byte
 
 // Salt returns the random salt in h.
@@ -303,8 +310,8 @@ func NewHeader(salt []byte, recordSize int, keyID string) (Header, error) {
 	return b, nil
 }
 
-// Writer implements a io.Writer that can
-// write ECE-formatted content to an underlying writer.
+// Writer encrypts data before it's written to
+// an underlying [io.Writer].
 type Writer struct {
 	gcm         cipher.AEAD
 	prk         []byte
