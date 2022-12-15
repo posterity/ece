@@ -476,15 +476,15 @@ func NewWriter(key, salt []byte, recordSize int, keyID string, w io.Writer) (*Wr
 	return e, nil
 }
 
-// Reader implements an io.Reader that can
-// decipher ECE data from an underlying reader.
+// Reader decrypts data form an underlying
+// [io.Reader].
 type Reader struct {
 	Header Header // nil until enough bytes are read
 
 	gcm cipher.AEAD
 	prk []byte
 	key []byte
-	r   io.ReadCloser
+	r   io.Reader
 	buf []byte
 	seq *big.Int // uint96
 	err error
@@ -593,13 +593,17 @@ func (d *Reader) Read(p []byte) (n int, err error) {
 	return
 }
 
-// Close closes the underlying reader.
+// Close closes the underlying reader
+// if it implements [io.Closer].
 func (d *Reader) Close() error {
-	return d.r.Close()
+	if closer, ok := d.r.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
 }
 
-// NewReader deciphers data from r.
-func NewReader(key []byte, r io.ReadCloser) *Reader {
+// NewReader deciphers data read from r.
+func NewReader(key []byte, r io.Reader) *Reader {
 	return &Reader{
 		r:   r,
 		key: key,
