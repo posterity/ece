@@ -652,3 +652,20 @@ func Pipe(src io.ReadCloser, key []byte, recordSize int, keyID string) (io.ReadC
 
 	return r, nil
 }
+
+// EncodeString encodes the given string using the given key,
+// and a random salt.
+func EncodeString(key []byte, content string) ([]byte, error) {
+	b := &bytes.Buffer{}
+	w, err := NewWriter(key, NewRandomSalt(), 1024, "", b)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.WriteString(w, content); err != nil {
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return b.Bytes(), nil
+}

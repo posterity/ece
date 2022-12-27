@@ -3,7 +3,6 @@ package ece
 import (
 	"bytes"
 	"crypto/rand"
-	_ "embed"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -319,4 +318,26 @@ func ExamplePipe() {
 
 	// The HTTP POST request was sent with the content of plain
 	// encrypted.
+}
+
+func TestEncodeString(t *testing.T) {
+	var (
+		key    = AES256GCM.RandomKey()
+		secret = "alice sent a message to bob."
+	)
+
+	cipher, err := EncodeString(key, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r := NewReader(key, bytes.NewReader(cipher))
+	plain, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if secret != string(plain) {
+		t.Fatal("unable to decrypt secret")
+	}
 }
