@@ -341,3 +341,52 @@ func TestEncodeString(t *testing.T) {
 		t.Fatal("unable to decrypt secret")
 	}
 }
+
+func TestCopy(t *testing.T) {
+	var (
+		key  = AES256GCM.RandomKey()
+		data = make([]byte, 1024<<10)
+	)
+	if _, err := rand.Read(data); err != nil {
+		t.Fatal(err)
+	}
+
+	cipher := &bytes.Buffer{}
+	w, err := NewWriter(key, NewRandomSalt(), 32, "", cipher)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := w.ReadFrom(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read != int64(len(data)) {
+		t.Fatal("invalid number of bytes read")
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	plain := &bytes.Buffer{}
+	r := NewReader(key, cipher)
+	written, err := r.WriteTo(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written <= int64(cipher.Len()) {
+		t.Fatal("invalid number of bytes written")
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(data) != plain.Len() {
+		t.Log(string(data))
+		t.Log(plain.String())
+		t.Fatal("invalid plain data length")
+	}
+	if !bytes.Equal(data, plain.Bytes()) {
+		t.Fatal("data decrypted does not match fixture")
+	}
+}

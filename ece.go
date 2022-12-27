@@ -111,8 +111,9 @@ func (e *Encoding) checkKey(k []byte) bool {
 }
 
 // RandomKey returns a random key suitable
-// for this encoding. The method will panic
-// if it can't generate random data.
+// for this encoding. The function will panic
+// if it can't generate random data using
+// crypto/rand.
 func (e *Encoding) RandomKey() []byte {
 	k := make([]byte, e.Bits/8)
 	if _, err := io.ReadFull(rand.Reader, k); err != nil {
@@ -321,6 +322,32 @@ type Writer struct {
 	err         error
 	contentSize int      // [record size] - [encryption overhead]
 	seq         *big.Int // uint96
+}
+
+// ReadFrom copies the content of r into the writer using
+// a buffer optimized for the configured record size.
+func (e *Writer) ReadFrom(r io.Reader) (n int64, err error) {
+	var (
+		p  = make([]byte, e.contentSize)
+		nn int
+	)
+	for {
+		nn, err = r.Read(p[:])
+		n += int64(nn)
+		if err == nil {
+			_, err = e.Write(p[:nn])
+			if err != nil {
+				break
+			}
+		} else if errors.Is(err, io.EOF) {
+			err = nil
+			break
+		} else {
+			break
+		}
+	}
+
+	return
 }
 
 // encrypt returns the cipher of p.
@@ -548,7 +575,7 @@ func (d *Reader) read(p []byte) (n int, err error) {
 		}
 	}()
 
-	if d.gcm == nil {
+	if d.Header == nil {
 		if err := d.readHeader(); err != nil {
 			err = &Error{msg: "ece: failed to read header", wrapped: err}
 			return 0, err
@@ -600,6 +627,41 @@ func (d *Reader) Read(p []byte) (n int, err error) {
 	return
 }
 
+// WriteTo copies the content of d into dst using a buffer optimized
+// for the record size declared in the header of the ECE cipher.
+func (d *Reader) WriteTo(dst io.Writer) (n int64, err error) {
+	if d.Header != nil {
+		return 0, errors.New("invalid state")
+	}
+	if err = d.readHeader(); err != nil {
+		return
+	}
+
+	var (
+		p  = make([]byte, d.Header.RecordSize()-d.gcm.Overhead())
+		nr int
+	)
+	for {
+		nr, err = d.Read(p[:])
+		if err != nil && !errors.Is(err, io.EOF) {
+			break
+		}
+
+		nw, wErr := dst.Write(p[:nr])
+		n += int64(nw)
+		if wErr != nil {
+			break
+		}
+
+		if errors.Is(err, io.EOF) {
+			err = nil
+			break
+		}
+	}
+
+	return
+}
+
 // Close closes the underlying reader
 // if it implements [io.Closer].
 func (d *Reader) Close() error {
@@ -630,11 +692,11 @@ func xorBytes(a, b []byte) ([]byte, error) {
 	return output, nil
 }
 
-// Pipe reads data from src and makes it available in an encrypted
-// form in the returned reader.
+// Pipe returns a reader from which the encrypted content in src
+// can be read in clear.
 //
 // Pipe will read src until EOF is reached.
-func Pipe(src io.ReadCloser, key []byte, recordSize int, keyID string) (io.ReadCloser, error) {
+func Pipe(src io.Reader, key []byte, recordSize int, keyID string) (io.ReadCloser, error) {
 	r, w := io.Pipe()
 	ew, err := NewWriter(key, NewRandomSalt(), recordSize, keyID, w)
 	if err != nil {
@@ -642,7 +704,6 @@ func Pipe(src io.ReadCloser, key []byte, recordSize int, keyID string) (io.ReadC
 	}
 
 	go func() {
-		defer src.Close()
 		if _, err := io.Copy(ew, src); err != nil {
 			w.CloseWithError(err)
 			return

@@ -9,13 +9,13 @@ import (
 
 // Cipher represents an ECE-encoded cipher.
 //
-// Cipher is useful to validate a cipher value
-// parsed from JSON ([json.Unmarshaler]), or read
-// from a [sql]-compatible database ([sql.Scanner])
+// Cipher is useful to validate a value parsed
+// from using [json.Unmarshaler], or read
+// from a database with [sql.Scanner].
 type Cipher []byte
 
 // UnmarshalJSON implements [json.Unmarshaler], and
-// returns an error if b does not contain a valid
+// returns an error if b does not start with a valid
 // ECE header.
 func (c *Cipher) UnmarshalJSON(b []byte) error {
 	raw := make([]byte, base64.StdEncoding.DecodedLen(len(b)))
@@ -35,9 +35,9 @@ func (c *Cipher) UnmarshalJSON(b []byte) error {
 }
 
 // Scan implements [sql.Scanner] and returns an error
-// if v is not a valid []byte with a valid ECE header.
-func (c *Cipher) Scan(v any) error {
-	b, ok := v.([]byte)
+// if v is not a []byte that starts with a valid ECE header.
+func (c *Cipher) Scan(src any) error {
+	b, ok := src.([]byte)
 	if !ok {
 		return errors.New("value is not a valid []byte")
 	}
