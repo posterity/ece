@@ -1,4 +1,4 @@
-[![GoDoc reference](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/github.com/posterity/ece)
+[![GoDoc reference](https://img.shields.io/badge/godoc-reference-blue.svg)](https://pkg.go.dev/code.posterity.life/ece)
 
 # Encrypted-Content-Encoding for HTTP
 
@@ -106,7 +106,7 @@ the `Content-Encoding` header is set to `aes128gcm` or `aes256gcm`.
 ```go
 var (
   keyID       = "ID of the key below"              // (Empty string to omit)
-  key         = []byte("16 or 32 byte long key")  
+  key         = []byte("16 or 32 byte long key")
   payload     = strings.NewReader(`{"key": "value"}`)
 )
 

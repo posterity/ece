@@ -39,7 +39,7 @@
 // [RFC8188] recommends using multiples of 16.
 //
 // [RFC8188]: https://datatracker.ietf.org/doc/html/rfc8188
-package ece
+package ece // code.posterity.life/ece
 
 import (
 	"bytes"
